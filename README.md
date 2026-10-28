@@ -24,3 +24,4 @@ Vsa dokumentacija je v mapi [docs](docs/):
 - [04 Arhitektura in tehnološki sklad](docs/04-arhitektura-in-tehnoloski-sklad.md)
 - [05 Uporabniške zgodbe](docs/05-uporabniske-zgodbe.md)
 - [06 Wireframes](docs/06-wireframes.md)
+- [Arhitekturne odločitve (ADR)](docs/adr/)

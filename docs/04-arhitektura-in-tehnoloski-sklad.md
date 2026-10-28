@@ -103,3 +103,5 @@ flowchart LR
 - Pravila za statuse so na enem mestu v backendu, ker frontendu ne moremo zaupati.
 - Imamo en backend namesto mikrostoritev, ker je projekt premajhen za kaj več.
 - Lokalno se vse zažene z Docker Compose, da ima vsak enako okolje.
+
+Podrobneje so odločitve opisane v mapi [adr](adr/).
