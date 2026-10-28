@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# okolje
+.env
+.env.*
+!.env.example
+
+# drugo
+*.zip
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
