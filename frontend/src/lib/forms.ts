@@ -12,3 +12,6 @@ export function applyServerError<T extends FieldValues>(err: unknown, setError: 
   }
   return 'Prišlo je do napake.'
 }
+
+export const optionalNumber = (v: unknown) => (v === '' || v == null || Number.isNaN(v) ? undefined : Number(v))
+export const optionalString = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v)
