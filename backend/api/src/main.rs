@@ -17,6 +17,9 @@ async fn main() {
 
     let db = sea_orm::Database::connect(env("DATABASE_URL")).await.expect("povezava z bazo");
     Migrator::up(&db, None).await.expect("migracije");
+    service::seed::ensure_admin(&db, &env("ADMIN_EMAIL"), &env("ADMIN_PASSWORD"))
+        .await
+        .expect("admin");
 
     let origin = std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".into());
     let cors = CorsLayer::new()

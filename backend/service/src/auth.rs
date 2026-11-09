@@ -3,11 +3,14 @@ use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, Pass
 use argon2::Argon2;
 use chrono::Utc;
 use entity::{provider_profile, user, UserRole, VerificationStatus};
+use jsonwebtoken::{decode, encode, errors::ErrorKind, DecodingKey, EncodingKey, Header, Validation};
 use rust_decimal::Decimal;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+pub const TOKEN_MINUTES: i64 = 60;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RegisterInput {
@@ -16,6 +19,12 @@ pub struct RegisterInput {
     pub password: String,
     pub role: UserRole,
     pub phone: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct LoginInput {
+    pub email: String,
+    pub password: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -39,6 +48,21 @@ impl From<user::Model> for UserDto {
     }
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LoginResponse {
+    pub token: String,
+    pub expires_in: i64,
+    pub user: UserDto,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: Uuid,
+    pub role: UserRole,
+    pub iat: i64,
+    pub exp: i64,
+}
+
 pub fn hash_password(password: &str) -> AppResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
@@ -51,6 +75,29 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
         .unwrap_or(false)
+}
+
+pub fn create_token(secret: &str, user_id: Uuid, role: UserRole) -> AppResult<String> {
+    let now = Utc::now().timestamp();
+    let claims = Claims {
+        sub: user_id,
+        role,
+        iat: now,
+        exp: now + TOKEN_MINUTES * 60,
+    };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
+        .map_err(|_| AppError::new(500, "INTERNAL", "Napaka pri ustvarjanju žetona."))
+}
+
+pub fn read_token(secret: &str, token: &str) -> AppResult<Claims> {
+    let mut v = Validation::default();
+    v.leeway = 0;
+    decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &v)
+        .map(|d| d.claims)
+        .map_err(|e| match e.kind() {
+            ErrorKind::ExpiredSignature => AppError::new(401, "TOKEN_EXPIRED", "Prijava je potekla."),
+            _ => AppError::unauthorized("Neveljaven žeton."),
+        })
 }
 
 fn valid_email(email: &str) -> bool {
@@ -136,6 +183,38 @@ fn email_taken() -> AppError {
     AppError::new(409, "EMAIL_TAKEN", "Račun s tem e-naslovom že obstaja.")
 }
 
+pub async fn login(db: &DatabaseConnection, secret: &str, input: LoginInput) -> AppResult<LoginResponse> {
+    let email = input.email.trim().to_lowercase();
+    let bad = || AppError::new(401, "INVALID_CREDENTIALS", "Napačen e-naslov ali geslo.");
+    let u = user::Entity::find()
+        .filter(user::Column::Email.eq(email))
+        .one(db)
+        .await?
+        .ok_or_else(bad)?;
+    if !verify_password(&input.password, &u.password_hash) {
+        return Err(bad());
+    }
+    if !u.is_active {
+        return Err(AppError::new(403, "ACCOUNT_BLOCKED", "Vaš račun je blokiran."));
+    }
+    let token = create_token(secret, u.id, u.role)?;
+    Ok(LoginResponse {
+        token,
+        expires_in: TOKEN_MINUTES * 60,
+        user: u.into(),
+    })
+}
+
+/// Loads the user behind a token. Blocked users get 401 even with a valid token.
+pub async fn current_user(db: &DatabaseConnection, secret: &str, token: &str) -> AppResult<user::Model> {
+    let claims = read_token(secret, token)?;
+    let u = user::Entity::find_by_id(claims.sub).one(db).await?;
+    match u {
+        Some(u) if u.is_active => Ok(u),
+        _ => Err(AppError::unauthorized("Neveljaven žeton.")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +225,31 @@ mod tests {
         assert!(h.starts_with("$argon2id$"));
         assert!(verify_password("geslo1234", &h));
         assert!(!verify_password("napacno12", &h));
+    }
+
+    #[test]
+    fn token_round_trip_and_60_minutes() {
+        let id = Uuid::new_v4();
+        let t = create_token("secret", id, UserRole::Customer).unwrap();
+        let c = read_token("secret", &t).unwrap();
+        assert_eq!(c.sub, id);
+        assert_eq!(c.exp - c.iat, 3600);
+        assert!(read_token("other", &t).is_err());
+    }
+
+    #[test]
+    fn expired_token_is_401() {
+        let now = Utc::now().timestamp();
+        let claims = Claims {
+            sub: Uuid::new_v4(),
+            role: UserRole::Customer,
+            iat: now - 7200,
+            exp: now - 3600,
+        };
+        let t = encode(&Header::default(), &claims, &EncodingKey::from_secret(b"s")).unwrap();
+        let e = read_token("s", &t).unwrap_err();
+        assert_eq!(e.status, 401);
+        assert_eq!(e.code, "TOKEN_EXPIRED");
     }
 
     #[test]

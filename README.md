@@ -21,7 +21,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-V `.env` zamenjaj `JWT_SECRET`. Frontend je na http://localhost:5173, API na http://localhost:8080/api/v1, Swagger UI pa na http://localhost:8080/swagger-ui.
+V `.env` zamenjaj `JWT_SECRET` in geslo administratorja. Frontend je na http://localhost:5173, API na http://localhost:8080/api/v1, Swagger UI pa na http://localhost:8080/swagger-ui.
 
 Brez Dockerja za backend in frontend rabiš Rust in Node.js 20. Baza naj teče v Dockerju:
 
