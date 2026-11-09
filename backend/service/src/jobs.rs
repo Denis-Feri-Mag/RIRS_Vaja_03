@@ -1,0 +1,271 @@
+use crate::error::{AppError, AppResult};
+use crate::workflow::{self, Actor};
+use chrono::{Duration, NaiveDate, Utc};
+use entity::{job_request, job_status_history, quote, service_category, user, JobStatus, QuoteStatus, UserRole};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, TransactionTrait,
+};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use uuid::Uuid;
+
+pub const EXPIRES_DAYS: i64 = 14;
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateJobInput {
+    pub category_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub city: String,
+    pub postal_code: String,
+    pub address_line: Option<String>,
+    pub preferred_from: Option<NaiveDate>,
+    pub preferred_to: Option<NaiveDate>,
+    pub budget_min: Option<f64>,
+    pub budget_max: Option<f64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobDto {
+    pub id: Uuid,
+    pub category_id: Uuid,
+    pub category_name: String,
+    pub title: String,
+    pub description: String,
+    pub city: String,
+    pub postal_code: String,
+    /// only for the customer
+    pub address_line: Option<String>,
+    pub preferred_from: Option<NaiveDate>,
+    pub preferred_to: Option<NaiveDate>,
+    pub budget_min: Option<f64>,
+    pub budget_max: Option<f64>,
+    pub status: JobStatus,
+    pub expires_at: chrono::DateTime<chrono::FixedOffset>,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+    pub is_owner: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct JobListItem {
+    pub id: Uuid,
+    pub title: String,
+    pub category_name: String,
+    pub city: String,
+    pub status: JobStatus,
+    pub quote_count: i64,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+}
+
+fn valid_postal_code(p: &str) -> bool {
+    p.len() == 4 && p.chars().all(|c| c.is_ascii_digit())
+}
+
+fn validate(input: &CreateJobInput) -> AppResult<()> {
+    let title = input.title.trim().chars().count();
+    if !(5..=150).contains(&title) {
+        return Err(AppError::field("title", "Naslov mora imeti od 5 do 150 znakov."));
+    }
+    if input.description.trim().chars().count() < 20 {
+        return Err(AppError::field("description", "Opis mora imeti vsaj 20 znakov."));
+    }
+    let city = input.city.trim().chars().count();
+    if city == 0 || city > 100 {
+        return Err(AppError::field("city", "Vpišite kraj."));
+    }
+    if !valid_postal_code(input.postal_code.trim()) {
+        return Err(AppError::field("postal_code", "Poštna številka mora imeti 4 števke."));
+    }
+    if input.address_line.as_ref().is_some_and(|a| a.trim().chars().count() > 200) {
+        return Err(AppError::field("address_line", "Ulica je predolga."));
+    }
+    if let (Some(a), Some(b)) = (input.preferred_from, input.preferred_to) {
+        if a > b {
+            return Err(AppError::field("preferred_to", "Konec termina ne sme biti pred začetkom."));
+        }
+    }
+    for (name, v) in [("budget_min", input.budget_min), ("budget_max", input.budget_max)] {
+        if v.is_some_and(|v| !(0.0..=100_000.0).contains(&v)) {
+            return Err(AppError::field(name, "Znesek mora biti med 0 in 100.000 €."));
+        }
+    }
+    if let (Some(a), Some(b)) = (input.budget_min, input.budget_max) {
+        if a > b {
+            return Err(AppError::field(
+                "budget_max",
+                "Najnižji znesek mora biti manjši ali enak najvišjemu.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub async fn create(db: &DatabaseConnection, u: &user::Model, input: CreateJobInput) -> AppResult<JobDto> {
+    if u.role != UserRole::Customer {
+        return Err(AppError::forbidden("Povpraševanje lahko objavi samo stranka."));
+    }
+    validate(&input)?;
+    let cat = service_category::Entity::find_by_id(input.category_id).one(db).await?;
+    if !cat.is_some_and(|c| c.is_active) {
+        return Err(AppError::field("category_id", "Izberite aktivno kategorijo."));
+    }
+    workflow::check_transition(None, JobStatus::Open, Actor::OwnerCustomer)?;
+    let now = Utc::now().fixed_offset();
+    let txn = db.begin().await?;
+    let job = job_request::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        customer_id: Set(u.id),
+        category_id: Set(input.category_id),
+        title: Set(input.title.trim().to_string()),
+        description: Set(input.description.trim().to_string()),
+        city: Set(input.city.trim().to_string()),
+        postal_code: Set(input.postal_code.trim().to_string()),
+        address_line: Set(input.address_line.map(|a| a.trim().to_string()).filter(|a| !a.is_empty())),
+        preferred_from: Set(input.preferred_from),
+        preferred_to: Set(input.preferred_to),
+        budget_min: Set(input.budget_min.map(crate::dec)),
+        budget_max: Set(input.budget_max.map(crate::dec)),
+        status: Set(JobStatus::Open),
+        accepted_quote_id: Set(None),
+        expires_at: Set(now + Duration::days(EXPIRES_DAYS)),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+    job_status_history::ActiveModel {
+        job_request_id: Set(job.id),
+        from_status: Set(None),
+        to_status: Set(JobStatus::Open),
+        changed_by: Set(u.id),
+        note: Set(None),
+        changed_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&txn)
+    .await?;
+    txn.commit().await?;
+    get(db, u, job.id).await
+}
+
+/// Who the user is for this job.
+pub struct JobAccess {
+    pub job: job_request::Model,
+    pub is_owner: bool,
+}
+
+pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -> AppResult<JobAccess> {
+    let job = job_request::Entity::find_by_id(job_id)
+        .one(db)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let is_owner = job.customer_id == u.id;
+    let can_view = u.role == UserRole::Admin || is_owner;
+    if !can_view {
+        return Err(AppError::forbidden("Do tega povpraševanja nimate dostopa."));
+    }
+    Ok(JobAccess { job, is_owner })
+}
+
+pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<JobDto> {
+    let a = access(db, u, job_id).await?;
+    let job = a.job;
+    let cat = service_category::Entity::find_by_id(job.category_id)
+        .one(db)
+        .await?
+        .map(|c| c.name)
+        .unwrap_or_default();
+    Ok(JobDto {
+        id: job.id,
+        category_id: job.category_id,
+        category_name: cat,
+        title: job.title,
+        description: job.description,
+        city: job.city,
+        postal_code: job.postal_code,
+        address_line: if a.is_owner { job.address_line } else { None },
+        preferred_from: job.preferred_from,
+        preferred_to: job.preferred_to,
+        budget_min: job.budget_min.map(crate::f),
+        budget_max: job.budget_max.map(crate::f),
+        status: job.status,
+        expires_at: job.expires_at,
+        created_at: job.created_at,
+        is_owner: a.is_owner,
+    })
+}
+
+pub async fn list_mine(db: &DatabaseConnection, u: &user::Model) -> AppResult<Vec<JobListItem>> {
+    if u.role != UserRole::Customer {
+        return Err(AppError::forbidden("To je na voljo samo strankam."));
+    }
+    let jobs = job_request::Entity::find()
+        .filter(job_request::Column::CustomerId.eq(u.id))
+        .order_by_desc(job_request::Column::CreatedAt)
+        .find_also_related(service_category::Entity)
+        .all(db)
+        .await?;
+    let mut out = Vec::with_capacity(jobs.len());
+    for (j, c) in jobs {
+        let quote_count = quote::Entity::find()
+            .filter(quote::Column::JobRequestId.eq(j.id))
+            .filter(quote::Column::Status.ne(QuoteStatus::Withdrawn))
+            .count(db)
+            .await? as i64;
+        out.push(JobListItem {
+            id: j.id,
+            title: j.title,
+            category_name: c.map(|c| c.name).unwrap_or_default(),
+            city: j.city,
+            status: j.status,
+            quote_count,
+            created_at: j.created_at,
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input() -> CreateJobInput {
+        CreateJobInput {
+            category_id: Uuid::new_v4(),
+            title: "Pušča pipa".into(),
+            description: "V kuhinji pušča pipa že nekaj dni.".into(),
+            city: "Maribor".into(),
+            postal_code: "2000".into(),
+            address_line: None,
+            preferred_from: None,
+            preferred_to: None,
+            budget_min: None,
+            budget_max: None,
+        }
+    }
+
+    #[test]
+    fn valid_input_passes() {
+        assert!(validate(&input()).is_ok());
+    }
+
+    #[test]
+    fn field_errors() {
+        let mut i = input();
+        i.title = "Pipa".into();
+        assert_eq!(validate(&i).unwrap_err().field.as_deref(), Some("title"));
+        let mut i = input();
+        i.description = "prekratko".into();
+        assert_eq!(validate(&i).unwrap_err().field.as_deref(), Some("description"));
+        let mut i = input();
+        i.postal_code = "200".into();
+        assert_eq!(validate(&i).unwrap_err().field.as_deref(), Some("postal_code"));
+        let mut i = input();
+        i.budget_min = Some(100.0);
+        i.budget_max = Some(50.0);
+        assert_eq!(validate(&i).unwrap_err().field.as_deref(), Some("budget_max"));
+        i.budget_max = Some(100.0);
+        assert!(validate(&i).is_ok());
+    }
+}
