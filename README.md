@@ -12,7 +12,24 @@ Popravi.si je spletna aplikacija za manjša dela v gospodinjstvu, npr. popravilo
 - prijava: JWT, gesla z Argon2id
 - lokalni zagon: Docker Compose
 
-Mapi `frontend/` in `backend/` sta za zdaj še prazni.
+## Lokalni zagon
+
+Potrebna sta Docker in Docker Compose.
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+V `.env` zamenjaj `JWT_SECRET`. Frontend je na http://localhost:5173, API na http://localhost:8080/api/v1, Swagger UI pa na http://localhost:8080/swagger-ui.
+
+Brez Dockerja za backend in frontend rabiš Rust in Node.js 20. Baza naj teče v Dockerju:
+
+```bash
+docker compose up db
+cd backend && cargo run -p api
+cd frontend && npm install && npm run dev
+```
 
 ## Dokumentacija
 
