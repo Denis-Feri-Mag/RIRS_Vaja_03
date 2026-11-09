@@ -37,7 +37,8 @@ impl Modify for BearerAuth {
     info(title = "Popravi.si API", version = "0.1.0"),
     modifiers(&BearerAuth),
     paths(
-        handlers::register, handlers::login, handlers::me,
+        handlers::register, handlers::login, handlers::me, handlers::categories,
+        handlers::create_job, handlers::my_jobs, handlers::get_job,
     )
 )]
 pub struct ApiDoc;
@@ -47,6 +48,10 @@ pub fn router(state: AppState, cors: CorsLayer) -> Router {
         .route("/auth/register", post(handlers::register))
         .route("/auth/login", post(handlers::login))
         .route("/auth/me", get(handlers::me))
+        .route("/categories", get(handlers::categories))
+        .route("/job-requests", post(handlers::create_job))
+        .route("/job-requests/mine", get(handlers::my_jobs))
+        .route("/job-requests/{id}", get(handlers::get_job))
         .with_state(state);
     Router::new()
         .nest("/api/v1", api)

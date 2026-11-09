@@ -1,6 +1,9 @@
 pub mod auth;
+pub mod categories;
 pub mod error;
+pub mod jobs;
 pub mod seed;
+pub mod workflow;
 
 pub use error::AppError;
 pub use sea_orm::DatabaseConnection;
@@ -14,6 +17,16 @@ pub fn today() -> chrono::NaiveDate {
 
 pub fn today_at(now: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDate {
     now.with_timezone(&TIME_ZONE).date_naive()
+}
+
+pub(crate) fn dec(v: f64) -> rust_decimal::Decimal {
+    use rust_decimal::prelude::FromPrimitive;
+    rust_decimal::Decimal::from_f64(v).unwrap_or_default().round_dp(2)
+}
+
+pub(crate) fn f(v: rust_decimal::Decimal) -> f64 {
+    use rust_decimal::prelude::ToPrimitive;
+    v.to_f64().unwrap_or_default()
 }
 
 #[cfg(test)]
