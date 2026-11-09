@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod seed;
 
 pub use error::AppError;
 pub use sea_orm::DatabaseConnection;
