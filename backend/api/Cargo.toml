@@ -1,0 +1,26 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+entity = { path = "../entity" }
+service = { path = "../service" }
+migration = { path = "../migration" }
+sea-orm = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+tracing = { workspace = true }
+utoipa = { workspace = true }
+axum = "0.8"
+dotenvy = "0.15"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
+
+[dev-dependencies]
+axum-test = "17"
