@@ -1,4 +1,4 @@
-import type { JobStatus } from './types'
+import type { JobStatus, QuoteStatus } from './types'
 
 export const jobStatusLabel: Record<JobStatus, string> = {
   OPEN: 'Objavljeno',
@@ -9,6 +9,13 @@ export const jobStatusLabel: Record<JobStatus, string> = {
   REVIEWED: 'Ocenjeno',
   CANCELLED: 'Preklicano',
   EXPIRED: 'Poteklo',
+}
+
+export const quoteStatusLabel: Record<QuoteStatus, string> = {
+  PENDING: 'Čaka',
+  ACCEPTED: 'Sprejeta',
+  REJECTED: 'Zavrnjena',
+  WITHDRAWN: 'Umaknjena',
 }
 
 export const euro = (v: number) => new Intl.NumberFormat('sl-SI', { style: 'currency', currency: 'EUR' }).format(v)
@@ -25,6 +32,12 @@ export function date(v: string | null) {
 
 export const dateTime = (v: string) => new Date(v).toLocaleString('sl-SI', { timeZone: TIME_ZONE })
 
+/** QUOTED with no active offers left, e.g. after a withdrawal. Status itself stays QUOTED. */
+export function jobStatusText(status: JobStatus, activeQuotes?: number) {
+  if (status === 'QUOTED' && activeQuotes === 0) return 'Čaka na ponudbe'
+  return jobStatusLabel[status]
+}
+
 export function budget(min: number | null, max: number | null) {
   if (min != null && max != null) return `${euro(min)} do ${euro(max)}`
   if (min != null) return `od ${euro(min)}`
@@ -38,3 +51,6 @@ export function term(from: string | null, to: string | null) {
   if (to) return `do ${date(to)}`
   return 'po dogovoru'
 }
+
+/** Today's date in Ljubljana as YYYY-MM-DD. */
+export const today = (now: Date = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(now)

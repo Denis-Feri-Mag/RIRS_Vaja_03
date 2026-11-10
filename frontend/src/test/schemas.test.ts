@@ -1,4 +1,5 @@
 import { jobSchema } from '../pages/NewJobPage'
+import { quoteSchema } from '../components/QuoteForm'
 
 const job = {
   category_id: 'c1',
@@ -23,5 +24,17 @@ describe('US-02 obrazec za povpraševanje', () => {
     expect(r.error?.issues[0].path).toEqual(['budget_max'])
     expect(jobSchema.safeParse({ ...job, budget_min: '50', budget_max: '50' }).success).toBe(true)
     expect(jobSchema.safeParse({ ...job, budget_min: '', budget_max: '' }).success).toBe(true)
+  })
+})
+
+describe('US-04 obrazec za ponudbo', () => {
+  const ok = { price: '60', estimated_hours: '1', earliest_start: '2999-01-01' }
+  it('preveri meje', () => {
+    expect(quoteSchema.safeParse(ok).success).toBe(true)
+    expect(quoteSchema.safeParse({ ...ok, price: '0' }).success).toBe(false)
+    expect(quoteSchema.safeParse({ ...ok, price: '100000.01' }).success).toBe(false)
+    expect(quoteSchema.safeParse({ ...ok, estimated_hours: '0.4' }).success).toBe(false)
+    expect(quoteSchema.safeParse({ ...ok, estimated_hours: '201' }).success).toBe(false)
+    expect(quoteSchema.safeParse({ ...ok, earliest_start: '2000-01-01' }).success).toBe(false)
   })
 })

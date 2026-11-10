@@ -9,6 +9,7 @@ import MyJobsPage from './pages/MyJobsPage'
 import NewJobPage from './pages/NewJobPage'
 import JobPage from './pages/JobPage'
 import MatchingPage from './pages/MatchingPage'
+import MyQuotesPage from './pages/MyQuotesPage'
 import ProfilePage from './pages/ProfilePage'
 
 function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }) {
@@ -53,6 +54,7 @@ export default function App() {
           {user?.role === 'PROVIDER' && (
             <>
               <NavLink to="/dela" end className="nav-tab">Ustrezna dela</NavLink>
+              <NavLink to="/ponudbe" end className="nav-tab">Moje ponudbe</NavLink>
               <NavLink to="/profil" end className="nav-tab">Profil</NavLink>
             </>
           )}
@@ -87,6 +89,7 @@ export default function App() {
           <Route path="/povprasevanja/novo" element={<RequireRole roles={['CUSTOMER']}><NewJobPage /></RequireRole>} />
           <Route path="/povprasevanja/:id" element={<RequireRole roles={['CUSTOMER', 'PROVIDER', 'ADMIN']}><JobPage /></RequireRole>} />
           <Route path="/dela" element={<RequireRole roles={['PROVIDER']}><MatchingPage /></RequireRole>} />
+          <Route path="/ponudbe" element={<RequireRole roles={['PROVIDER']}><MyQuotesPage /></RequireRole>} />
           <Route path="/profil" element={<RequireRole roles={['PROVIDER']}><ProfilePage /></RequireRole>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

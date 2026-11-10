@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { date, jobStatusLabel } from '../lib/format'
+import { date, jobStatusText } from '../lib/format'
 import type { JobListItem } from '../lib/types'
 
 export default function MyJobsPage() {
@@ -20,7 +20,7 @@ export default function MyJobsPage() {
           <Link key={j.id} to={`/povprasevanja/${j.id}`} className="card block hover:bg-slate-50">
             <div className="flex justify-between">
               <span className="font-medium">{j.title}</span>
-              <span className="text-sm">{jobStatusLabel[j.status]}</span>
+              <span className="text-sm">{jobStatusText(j.status, j.quote_count)}</span>
             </div>
             <p className="text-sm text-slate-600">
               {j.category_name}, {j.city}, objavljeno {date(j.created_at)}, ponudb: {j.quote_count}
