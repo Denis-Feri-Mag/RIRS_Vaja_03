@@ -40,7 +40,7 @@ impl Modify for BearerAuth {
         handlers::register, handlers::login, handlers::me, handlers::categories,
         handlers::my_profile, handlers::update_my_profile,
         handlers::create_job, handlers::my_jobs, handlers::matching, handlers::get_job,
-        handlers::create_quote, handlers::my_quote, handlers::update_quote, handlers::withdraw_quote, handlers::my_quotes,
+        handlers::create_quote, handlers::job_quotes, handlers::my_quote, handlers::update_quote, handlers::withdraw_quote, handlers::accept_quote, handlers::my_quotes,
     )
 )]
 pub struct ApiDoc;
@@ -56,11 +56,12 @@ pub fn router(state: AppState, cors: CorsLayer) -> Router {
         .route("/job-requests/mine", get(handlers::my_jobs))
         .route("/job-requests/matching", get(handlers::matching))
         .route("/job-requests/{id}", get(handlers::get_job))
-        .route("/job-requests/{id}/quotes", post(handlers::create_quote))
+        .route("/job-requests/{id}/quotes", get(handlers::job_quotes).post(handlers::create_quote))
         .route("/job-requests/{id}/my-quote", get(handlers::my_quote))
         .route("/quotes/mine", get(handlers::my_quotes))
         .route("/quotes/{id}", axum::routing::put(handlers::update_quote))
         .route("/quotes/{id}/withdraw", post(handlers::withdraw_quote))
+        .route("/quotes/{id}/accept", post(handlers::accept_quote))
         .with_state(state);
     Router::new()
         .nest("/api/v1", api)

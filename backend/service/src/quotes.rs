@@ -3,9 +3,10 @@ use crate::jobs::access;
 use crate::providers::profile_for_user;
 use crate::workflow::{self, Actor};
 use chrono::{NaiveDate, Utc};
-use entity::{job_request, provider_profile, quote, user, JobStatus, QuoteStatus, VerificationStatus};
+use entity::{job_request, provider_profile, quote, user, JobStatus, QuoteStatus, UserRole, VerificationStatus};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+    sea_query::Expr, ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QuerySelect, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -189,6 +190,38 @@ pub async fn withdraw(db: &DatabaseConnection, u: &user::Model, quote_id: Uuid) 
     Ok(to_dto(q, &p))
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum QuoteSort {
+    #[default]
+    Price,
+    Start,
+}
+
+pub async fn list_for_job(db: &DatabaseConnection, u: &user::Model, job_id: Uuid, sort: QuoteSort) -> AppResult<Vec<QuoteDto>> {
+    let job = job_request::Entity::find_by_id(job_id)
+        .one(db)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    if !(u.role == UserRole::Customer && job.customer_id == u.id) && u.role != UserRole::Admin {
+        return Err(AppError::forbidden(
+            "Ponudbe lahko vidi samo stranka, ki je objavila povpraševanje.",
+        ));
+    }
+    let rows = quote::Entity::find()
+        .filter(quote::Column::JobRequestId.eq(job_id))
+        .filter(quote::Column::Status.ne(QuoteStatus::Withdrawn))
+        .find_also_related(provider_profile::Entity)
+        .all(db)
+        .await?;
+    let mut out: Vec<QuoteDto> = rows.into_iter().filter_map(|(q, p)| p.map(|p| to_dto(q, &p))).collect();
+    match sort {
+        QuoteSort::Price => out.sort_by(|a, b| a.price.total_cmp(&b.price).then(a.earliest_start.cmp(&b.earliest_start))),
+        QuoteSort::Start => out.sort_by(|a, b| a.earliest_start.cmp(&b.earliest_start).then(a.price.total_cmp(&b.price))),
+    }
+    Ok(out)
+}
+
 pub async fn my_quote(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<Option<QuoteDto>> {
     let p = profile_for_user(db, u).await?;
     let q = quote::Entity::find()
@@ -197,6 +230,54 @@ pub async fn my_quote(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) ->
         .one(db)
         .await?;
     Ok(q.map(|q| to_dto(q, &p)))
+}
+
+/// Accept one quote: all in one transaction, see US-05.
+pub async fn accept(db: &DatabaseConnection, u: &user::Model, quote_id: Uuid) -> AppResult<QuoteDto> {
+    let txn = db.begin().await?;
+    let q = quote::Entity::find_by_id(quote_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let job = job_request::Entity::find_by_id(q.job_request_id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    if !(u.role == UserRole::Customer && job.customer_id == u.id) {
+        return Err(AppError::forbidden(
+            "Ponudbo lahko sprejme samo stranka, ki je objavila povpraševanje.",
+        ));
+    }
+    workflow::check_transition(Some(job.status), JobStatus::Accepted, Actor::OwnerCustomer)?;
+    let q = quote::Entity::find_by_id(quote_id)
+        .lock_exclusive()
+        .one(&txn)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    if q.status != QuoteStatus::Pending {
+        return Err(AppError::new(409, "QUOTE_NOT_PENDING", "Te ponudbe ni več mogoče sprejeti."));
+    }
+    let now = Utc::now().fixed_offset();
+    quote::Entity::update_many()
+        .col_expr(quote::Column::Status, QuoteStatus::Rejected.as_enum())
+        .col_expr(quote::Column::UpdatedAt, Expr::value(now))
+        .filter(quote::Column::JobRequestId.eq(job.id))
+        .filter(quote::Column::Status.eq(QuoteStatus::Pending))
+        .filter(quote::Column::Id.ne(q.id))
+        .exec(&txn)
+        .await?;
+    let mut am: quote::ActiveModel = q.into();
+    am.status = Set(QuoteStatus::Accepted);
+    am.updated_at = Set(now);
+    let q = am.update(&txn).await?;
+    workflow::apply(&txn, job, JobStatus::Accepted, Actor::OwnerCustomer, u.id, None, Some(q.id)).await?;
+    let p = provider_profile::Entity::find_by_id(q.provider_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    txn.commit().await?;
+    Ok(to_dto(q, &p))
 }
 
 #[cfg(test)]
