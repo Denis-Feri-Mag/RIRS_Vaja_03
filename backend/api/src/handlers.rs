@@ -8,7 +8,7 @@ use serde::Deserialize;
 use service::{
     auth::{self, LoginInput, LoginResponse, RegisterInput, UserDto},
     categories::{self, CategoryDto},
-    jobs::{self, CreateJobInput, JobDto, JobListItem, MatchingPage},
+    jobs::{self, CreateJobInput, HistoryDto, JobDto, JobListItem, MatchingPage, StatusInput},
     providers::{self, ProviderProfileDto, ProviderProfileInput},
     quotes::{self, MyQuoteItem, QuoteDto, QuoteInput, QuoteSort},
 };
@@ -76,6 +76,21 @@ pub async fn matching(State(s): State<AppState>, CurrentUser(u): CurrentUser, Qu
 #[utoipa::path(get, path = "/api/v1/job-requests/{id}", security(("bearer" = [])), responses((status = 200, body = JobDto)))]
 pub async fn get_job(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<JobDto>> {
     Ok(Json(jobs::get(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(get, path = "/api/v1/job-requests/{id}/history", security(("bearer" = [])), responses((status = 200, body = [HistoryDto])))]
+pub async fn job_history(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<Vec<HistoryDto>>> {
+    Ok(Json(jobs::history(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/job-requests/{id}/status", security(("bearer" = [])), request_body = StatusInput, responses((status = 200, body = JobDto), (status = 409)))]
+pub async fn change_status(
+    State(s): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<StatusInput>,
+) -> ApiResult<Json<JobDto>> {
+    Ok(Json(jobs::change_status(&s.db, &u, id, input).await?))
 }
 
 #[utoipa::path(post, path = "/api/v1/job-requests/{id}/quotes", security(("bearer" = [])), request_body = QuoteInput, responses((status = 201, body = QuoteDto), (status = 403), (status = 409)))]

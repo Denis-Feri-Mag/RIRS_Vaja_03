@@ -23,6 +23,8 @@ docker compose up --build
 
 V `.env` zamenjaj `JWT_SECRET` in geslo administratorja. Frontend je na http://localhost:5173, API na http://localhost:8080/api/v1, Swagger UI pa na http://localhost:8080/swagger-ui.
 
+Če je v `.env` nastavljen `DEMO_PASSWORD`, se ob zagonu ustvarijo testni računi s tem geslom: stranka `stranka@popravi.test`, preverjen mojster `mojster@popravi.test` in nepreverjen mojster `novi.mojster@popravi.test`. Mojstra pokrivata vodovodna dela in elektriko za poštni številki 2000 in 2341.
+
 Brez Dockerja za backend in frontend rabiš Rust in Node.js 20. Baza naj teče v Dockerju:
 
 ```bash
@@ -30,6 +32,15 @@ docker compose up db
 cd backend && cargo run -p api
 cd frontend && npm install && npm run dev
 ```
+
+## Testi
+
+```bash
+cd backend && cargo test
+cd frontend && npm test
+```
+
+Backend testi za API rabijo prazno bazo PostgreSQL, npr. `TEST_DATABASE_URL=postgres://popravi:popravi@localhost:5432/postgres cargo test`. Vsak test si ustvari svojo bazo. Brez te spremenljivke se ti testi preskočijo.
 
 ## Dokumentacija
 

@@ -20,6 +20,11 @@ async fn main() {
     service::seed::ensure_admin(&db, &env("ADMIN_EMAIL"), &env("ADMIN_PASSWORD"))
         .await
         .expect("admin");
+    if let Ok(p) = std::env::var("DEMO_PASSWORD") {
+        if !p.is_empty() {
+            service::seed::seed_demo(&db, &p).await.expect("demo podatki");
+        }
+    }
 
     let origin = std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".into());
     let cors = CorsLayer::new()
