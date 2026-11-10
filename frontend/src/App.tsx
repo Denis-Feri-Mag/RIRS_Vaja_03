@@ -8,6 +8,8 @@ import RegisterPage from './pages/RegisterPage'
 import MyJobsPage from './pages/MyJobsPage'
 import NewJobPage from './pages/NewJobPage'
 import JobPage from './pages/JobPage'
+import MatchingPage from './pages/MatchingPage'
+import ProfilePage from './pages/ProfilePage'
 
 function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }) {
   const { user } = useAuth()
@@ -19,8 +21,9 @@ function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }
 function Home() {
   const { user } = useAuth()
   if (!user) return <Navigate to="/prijava" replace />
+  if (user.role === 'PROVIDER') return <Navigate to="/dela" replace />
   if (user.role === 'CUSTOMER') return <Navigate to="/povprasevanja" replace />
-  return <p className="card">Popravi.si je v izdelavi.</p>
+  return <p className="card">Administracija pride v kasnejši različici.</p>
 }
 
 export default function App() {
@@ -45,6 +48,12 @@ export default function App() {
             <>
               <NavLink to="/povprasevanja" end className="nav-tab">Moja povpraševanja</NavLink>
               <NavLink to="/povprasevanja/novo" end className="nav-tab">Novo povpraševanje</NavLink>
+            </>
+          )}
+          {user?.role === 'PROVIDER' && (
+            <>
+              <NavLink to="/dela" end className="nav-tab">Ustrezna dela</NavLink>
+              <NavLink to="/profil" end className="nav-tab">Profil</NavLink>
             </>
           )}
           <span className="ml-auto" />
@@ -76,7 +85,9 @@ export default function App() {
           <Route path="/registracija" element={<RegisterPage />} />
           <Route path="/povprasevanja" element={<RequireRole roles={['CUSTOMER']}><MyJobsPage /></RequireRole>} />
           <Route path="/povprasevanja/novo" element={<RequireRole roles={['CUSTOMER']}><NewJobPage /></RequireRole>} />
-          <Route path="/povprasevanja/:id" element={<RequireRole roles={['CUSTOMER', 'ADMIN']}><JobPage /></RequireRole>} />
+          <Route path="/povprasevanja/:id" element={<RequireRole roles={['CUSTOMER', 'PROVIDER', 'ADMIN']}><JobPage /></RequireRole>} />
+          <Route path="/dela" element={<RequireRole roles={['PROVIDER']}><MatchingPage /></RequireRole>} />
+          <Route path="/profil" element={<RequireRole roles={['PROVIDER']}><ProfilePage /></RequireRole>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

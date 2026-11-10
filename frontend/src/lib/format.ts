@@ -23,6 +23,8 @@ export function date(v: string | null) {
   return new Date(v).toLocaleDateString('sl-SI', { timeZone: TIME_ZONE })
 }
 
+export const dateTime = (v: string) => new Date(v).toLocaleString('sl-SI', { timeZone: TIME_ZONE })
+
 export function budget(min: number | null, max: number | null) {
   if (min != null && max != null) return `${euro(min)} do ${euro(max)}`
   if (min != null) return `od ${euro(min)}`
