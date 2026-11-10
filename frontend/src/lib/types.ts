@@ -105,6 +105,15 @@ export interface MyQuoteItem {
   job_city: string
 }
 
+export interface HistoryItem {
+  from_status: JobStatus | null
+  to_status: JobStatus
+  changed_by_name: string
+  changed_by_role: Role
+  note: string | null
+  changed_at: string
+}
+
 export interface ProviderProfile {
   id: string
   business_name: string
