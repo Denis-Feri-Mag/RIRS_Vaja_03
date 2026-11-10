@@ -2,6 +2,7 @@ pub mod auth;
 pub mod categories;
 pub mod error;
 pub mod jobs;
+pub mod providers;
 pub mod seed;
 pub mod workflow;
 
