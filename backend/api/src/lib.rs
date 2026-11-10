@@ -38,7 +38,8 @@ impl Modify for BearerAuth {
     modifiers(&BearerAuth),
     paths(
         handlers::register, handlers::login, handlers::me, handlers::categories,
-        handlers::create_job, handlers::my_jobs, handlers::get_job,
+        handlers::my_profile, handlers::update_my_profile,
+        handlers::create_job, handlers::my_jobs, handlers::matching, handlers::get_job,
     )
 )]
 pub struct ApiDoc;
@@ -49,8 +50,10 @@ pub fn router(state: AppState, cors: CorsLayer) -> Router {
         .route("/auth/login", post(handlers::login))
         .route("/auth/me", get(handlers::me))
         .route("/categories", get(handlers::categories))
+        .route("/providers/me", get(handlers::my_profile).put(handlers::update_my_profile))
         .route("/job-requests", post(handlers::create_job))
         .route("/job-requests/mine", get(handlers::my_jobs))
+        .route("/job-requests/matching", get(handlers::matching))
         .route("/job-requests/{id}", get(handlers::get_job))
         .with_state(state);
     Router::new()

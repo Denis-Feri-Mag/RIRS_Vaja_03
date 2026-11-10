@@ -1,14 +1,17 @@
 use crate::{error::ApiResult, extract::CurrentUser, AppState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
+use serde::Deserialize;
 use service::{
     auth::{self, LoginInput, LoginResponse, RegisterInput, UserDto},
     categories::{self, CategoryDto},
-    jobs::{self, CreateJobInput, JobDto, JobListItem},
+    jobs::{self, CreateJobInput, JobDto, JobListItem, MatchingPage},
+    providers::{self, ProviderProfileDto, ProviderProfileInput},
 };
+use utoipa::IntoParams;
 use uuid::Uuid;
 
 #[utoipa::path(post, path = "/api/v1/auth/register", request_body = RegisterInput, responses((status = 201, body = UserDto), (status = 409)))]
@@ -31,6 +34,20 @@ pub async fn categories(State(s): State<AppState>) -> ApiResult<Json<Vec<Categor
     Ok(Json(categories::list_active(&s.db).await?))
 }
 
+#[utoipa::path(get, path = "/api/v1/providers/me", security(("bearer" = [])), responses((status = 200, body = ProviderProfileDto)))]
+pub async fn my_profile(State(s): State<AppState>, CurrentUser(u): CurrentUser) -> ApiResult<Json<ProviderProfileDto>> {
+    Ok(Json(providers::get_mine(&s.db, &u).await?))
+}
+
+#[utoipa::path(put, path = "/api/v1/providers/me", security(("bearer" = [])), request_body = ProviderProfileInput, responses((status = 200, body = ProviderProfileDto)))]
+pub async fn update_my_profile(
+    State(s): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Json(input): Json<ProviderProfileInput>,
+) -> ApiResult<Json<ProviderProfileDto>> {
+    Ok(Json(providers::update_mine(&s.db, &u, input).await?))
+}
+
 #[utoipa::path(post, path = "/api/v1/job-requests", security(("bearer" = [])), request_body = CreateJobInput, responses((status = 201, body = JobDto)))]
 pub async fn create_job(
     State(s): State<AppState>,
@@ -43,6 +60,16 @@ pub async fn create_job(
 #[utoipa::path(get, path = "/api/v1/job-requests/mine", security(("bearer" = [])), responses((status = 200, body = [JobListItem])))]
 pub async fn my_jobs(State(s): State<AppState>, CurrentUser(u): CurrentUser) -> ApiResult<Json<Vec<JobListItem>>> {
     Ok(Json(jobs::list_mine(&s.db, &u).await?))
+}
+
+#[derive(Deserialize, IntoParams)]
+pub struct PageQuery {
+    page: Option<u64>,
+}
+
+#[utoipa::path(get, path = "/api/v1/job-requests/matching", params(PageQuery), security(("bearer" = [])), responses((status = 200, body = MatchingPage)))]
+pub async fn matching(State(s): State<AppState>, CurrentUser(u): CurrentUser, Query(q): Query<PageQuery>) -> ApiResult<Json<MatchingPage>> {
+    Ok(Json(jobs::matching(&s.db, &u, q.page.unwrap_or(1)).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/job-requests/{id}", security(("bearer" = [])), responses((status = 200, body = JobDto)))]

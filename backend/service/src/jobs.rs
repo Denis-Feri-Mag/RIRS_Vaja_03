@@ -1,15 +1,20 @@
 use crate::error::{AppError, AppResult};
+use crate::providers::{profile_for_user, valid_postal_code};
 use crate::workflow::{self, Actor};
 use chrono::{Duration, NaiveDate, Utc};
-use entity::{job_request, job_status_history, quote, service_category, user, JobStatus, QuoteStatus, UserRole};
+use entity::{
+    job_request, job_status_history, provider_category, provider_profile, quote, service_category, user, JobStatus, QuoteStatus, UserRole,
+    VerificationStatus,
+};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
+    PaginatorTrait, QueryFilter, QueryOrder, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+pub const PAGE_SIZE: u64 = 20;
 pub const EXPIRES_DAYS: i64 = 14;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -58,8 +63,32 @@ pub struct JobListItem {
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
-fn valid_postal_code(p: &str) -> bool {
-    p.len() == 4 && p.chars().all(|c| c.is_ascii_digit())
+#[derive(Debug, Serialize, ToSchema, FromQueryResult)]
+pub struct MatchingItem {
+    pub id: Uuid,
+    pub title: String,
+    pub category_name: String,
+    pub city: String,
+    pub postal_code: String,
+    pub preferred_from: Option<NaiveDate>,
+    pub preferred_to: Option<NaiveDate>,
+    pub budget_min: Option<f64>,
+    pub budget_max: Option<f64>,
+    pub status: String,
+    pub quote_count: i64,
+    pub quote_sent: bool,
+    pub created_at: chrono::DateTime<chrono::FixedOffset>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MatchingPage {
+    pub items: Vec<MatchingItem>,
+    pub page: u64,
+    pub page_size: u64,
+    pub total: i64,
+    pub verification_status: VerificationStatus,
+    pub category_names: Vec<String>,
+    pub service_postal_codes: Vec<String>,
 }
 
 fn validate(input: &CreateJobInput) -> AppResult<()> {
@@ -153,6 +182,18 @@ pub async fn create(db: &DatabaseConnection, u: &user::Model, input: CreateJobIn
 pub struct JobAccess {
     pub job: job_request::Model,
     pub is_owner: bool,
+    pub provider: Option<provider_profile::Model>,
+    pub provider_matches: bool,
+}
+
+pub async fn provider_matches<C: ConnectionTrait>(db: &C, p: &provider_profile::Model, job: &job_request::Model) -> AppResult<bool> {
+    if !p.service_postal_codes.contains(&job.postal_code) {
+        return Ok(false);
+    }
+    Ok(provider_category::Entity::find_by_id((p.id, job.category_id))
+        .one(db)
+        .await?
+        .is_some())
 }
 
 pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -> AppResult<JobAccess> {
@@ -160,12 +201,24 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -
         .one(db)
         .await?
         .ok_or_else(AppError::not_found)?;
+    let (provider, matches) = if u.role == UserRole::Provider {
+        let p = profile_for_user(db, u).await?;
+        let m = provider_matches(db, &p, &job).await?;
+        (Some(p), m)
+    } else {
+        (None, false)
+    };
     let is_owner = job.customer_id == u.id;
-    let can_view = u.role == UserRole::Admin || is_owner;
+    let can_view = u.role == UserRole::Admin || is_owner || matches;
     if !can_view {
         return Err(AppError::forbidden("Do tega povpraševanja nimate dostopa."));
     }
-    Ok(JobAccess { job, is_owner })
+    Ok(JobAccess {
+        job,
+        is_owner,
+        provider,
+        provider_matches: matches,
+    })
 }
 
 pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<JobDto> {
@@ -224,6 +277,60 @@ pub async fn list_mine(db: &DatabaseConnection, u: &user::Model) -> AppResult<Ve
         });
     }
     Ok(out)
+}
+
+const MATCHING_WHERE: &str = r#"
+FROM job_requests j
+JOIN service_categories c ON c.id = j.category_id
+WHERE j.status IN ('OPEN', 'QUOTED')
+  AND j.category_id IN (SELECT category_id FROM provider_categories WHERE provider_profile_id = $1)
+  AND j.postal_code = ANY (SELECT unnest(service_postal_codes) FROM provider_profiles WHERE id = $1)
+"#;
+
+pub async fn matching(db: &DatabaseConnection, u: &user::Model, page: u64) -> AppResult<MatchingPage> {
+    let p = profile_for_user(db, u).await?;
+    let page = page.max(1);
+    let offset = (page - 1) * PAGE_SIZE;
+    let sql = format!(
+        r#"SELECT j.id, j.title, c.name AS category_name, j.city, j.postal_code, j.preferred_from, j.preferred_to,
+            j.budget_min::float8 AS budget_min, j.budget_max::float8 AS budget_max, j.status::text AS status,
+            (SELECT COUNT(*) FROM quotes q WHERE q.job_request_id = j.id AND q.status <> 'WITHDRAWN') AS quote_count,
+            EXISTS (SELECT 1 FROM quotes q WHERE q.job_request_id = j.id AND q.provider_id = $1) AS quote_sent,
+            j.created_at
+        {MATCHING_WHERE}
+        ORDER BY j.created_at DESC
+        LIMIT {PAGE_SIZE} OFFSET $2"#
+    );
+    let items = MatchingItem::find_by_statement(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        sql,
+        [p.id.into(), (offset as i64).into()],
+    ))
+    .all(db)
+    .await?;
+    #[derive(FromQueryResult)]
+    struct Total {
+        total: i64,
+    }
+    let total = Total::find_by_statement(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        format!("SELECT COUNT(*) AS total {MATCHING_WHERE}"),
+        [p.id.into()],
+    ))
+    .one(db)
+    .await?
+    .map(|t| t.total)
+    .unwrap_or(0);
+    let dto = crate::providers::to_dto(db, p).await?;
+    Ok(MatchingPage {
+        items,
+        page,
+        page_size: PAGE_SIZE,
+        total,
+        verification_status: dto.verification_status,
+        category_names: dto.category_names,
+        service_postal_codes: dto.service_postal_codes,
+    })
 }
 
 #[cfg(test)]
