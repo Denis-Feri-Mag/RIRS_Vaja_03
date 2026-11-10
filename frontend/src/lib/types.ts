@@ -1,5 +1,6 @@
 export type Role = 'CUSTOMER' | 'PROVIDER' | 'ADMIN'
 export type JobStatus = 'OPEN' | 'QUOTED' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'REVIEWED' | 'CANCELLED' | 'EXPIRED'
+export type QuoteStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'WITHDRAWN'
 export type VerificationStatus = 'PENDING' | 'VERIFIED' | 'REJECTED'
 
 export interface User {
@@ -32,6 +33,7 @@ export interface Job {
   status: JobStatus
   expires_at: string
   created_at: string
+  active_quote_count: number
   is_owner: boolean
 }
 
@@ -69,6 +71,28 @@ export interface MatchingPage {
   verification_status: VerificationStatus
   category_names: string[]
   service_postal_codes: string[]
+}
+
+export interface Quote {
+  id: string
+  job_request_id: string
+  provider_id: string
+  provider_name: string
+  provider_avg_rating: number
+  provider_completed_jobs: number
+  price: number
+  estimated_hours: number
+  earliest_start: string
+  message: string | null
+  status: QuoteStatus
+  created_at: string
+}
+
+export interface MyQuoteItem {
+  quote: Quote
+  job_title: string
+  job_status: JobStatus
+  job_city: string
 }
 
 export interface ProviderProfile {
