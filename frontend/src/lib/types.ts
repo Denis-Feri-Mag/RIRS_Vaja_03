@@ -17,6 +17,12 @@ export interface Category {
   slug: string
 }
 
+export interface Contact {
+  full_name: string
+  phone: string | null
+  business_name: string | null
+}
+
 export interface Job {
   id: string
   category_id: string
@@ -31,10 +37,14 @@ export interface Job {
   budget_min: number | null
   budget_max: number | null
   status: JobStatus
+  accepted_quote_id: string | null
   expires_at: string
   created_at: string
   active_quote_count: number
   is_owner: boolean
+  is_accepted_provider: boolean
+  customer: Contact | null
+  provider: Contact | null
 }
 
 export interface JobListItem {

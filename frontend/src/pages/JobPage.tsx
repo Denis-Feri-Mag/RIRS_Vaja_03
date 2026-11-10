@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth'
 import { budget, date, euro, jobStatusText, quoteStatusLabel, term } from '../lib/format'
 import type { Job, ProviderProfile, Quote } from '../lib/types'
 import QuoteForm from '../components/QuoteForm'
+import QuotesTable from '../components/QuotesTable'
 
 export default function JobPage() {
   const { id = '' } = useParams()
@@ -45,7 +46,8 @@ export default function JobPage() {
   }
 
   const quote = myQuote.data
-  const offerMode = isProvider && verified && ['OPEN', 'QUOTED'].includes(j.status) && myQuote.isSuccess && (!quote || editing)
+  const offerMode =
+    isProvider && !j.is_accepted_provider && verified && ['OPEN', 'QUOTED'].includes(j.status) && myQuote.isSuccess && (!quote || editing)
 
   if (offerMode) {
     return (
@@ -87,10 +89,38 @@ export default function JobPage() {
     )
   }
 
+  const compareMode = j.is_owner && ['OPEN', 'QUOTED'].includes(j.status)
   return (
     <div className="space-y-4">
+      {compareMode && (
+        <QuotesTable
+          jobId={id}
+          canAccept={j.status === 'QUOTED'}
+          onAccepted={refresh}
+          header={
+            <>
+              <p className="mb-2 text-sm text-slate-500">
+                <Link to="/povprasevanja" className="hover:underline">Moja povpraševanja</Link> › {j.title}
+              </p>
+              <h1 className="flex items-center gap-2 text-2xl font-semibold text-sage-600">
+                {j.title}
+                <span className="rounded-full bg-sage-100 px-3 py-0.5 text-xs font-normal text-sage-800">
+                  {jobStatusText(j.status, j.active_quote_count)}
+                </span>
+              </h1>
+              <p className="text-sm text-slate-600">
+                Prejete ponudbe: {j.active_quote_count} · poteče {date(j.expires_at)}
+              </p>
+            </>
+          }
+        />
+      )}
       <div className="card">
-        <h1 className="text-xl font-semibold text-sage-600">{j.title}</h1>
+        {compareMode ? (
+          <h2 className="text-lg font-semibold">Podatki o povpraševanju</h2>
+        ) : (
+          <h1 className="text-xl font-semibold text-sage-600">{j.title}</h1>
+        )}
         <p className="mb-2 text-sm text-slate-600">
           {j.category_name}, {j.postal_code} {j.city}, status: {jobStatusText(j.status, j.active_quote_count)}
         </p>
@@ -103,7 +133,23 @@ export default function JobPage() {
         </div>
       </div>
 
-      {isProvider && (
+      {j.provider && (
+        <div className="card text-sm">
+          <h2 className="mb-1 font-semibold">Izbrani mojster</h2>
+          <p>{j.provider.business_name ?? j.provider.full_name}</p>
+          <p>{j.provider.full_name}, telefon: {j.provider.phone ?? 'ni vpisan'}</p>
+        </div>
+      )}
+      {j.customer && (
+        <div className="card text-sm">
+          <h2 className="mb-1 font-semibold">Stranka</h2>
+          <p>{j.customer.full_name}, telefon: {j.customer.phone ?? 'ni vpisan'}</p>
+        </div>
+      )}
+
+      {j.is_owner && !compareMode && <div className="card"><QuotesTable jobId={id} canAccept={false} onAccepted={refresh} /></div>}
+
+      {isProvider && !j.is_accepted_provider && (
         <div className="card">
           <h2 className="mb-3 font-semibold">Vaša ponudba</h2>
           {!quote && profile.data && !verified && (
