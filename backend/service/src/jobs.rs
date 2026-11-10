@@ -7,8 +7,8 @@ use entity::{
     VerificationStatus,
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
+    ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+    FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -104,6 +104,22 @@ pub struct MatchingPage {
     pub verification_status: VerificationStatus,
     pub category_names: Vec<String>,
     pub service_postal_codes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HistoryDto {
+    pub from_status: Option<JobStatus>,
+    pub to_status: JobStatus,
+    pub changed_by_name: String,
+    pub changed_by_role: UserRole,
+    pub note: Option<String>,
+    pub changed_at: chrono::DateTime<chrono::FixedOffset>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StatusInput {
+    pub status: JobStatus,
+    pub note: Option<String>,
 }
 
 fn validate(input: &CreateJobInput) -> AppResult<()> {
@@ -203,6 +219,9 @@ pub struct JobAccess {
 }
 
 impl JobAccess {
+    pub fn actor(&self, u: &user::Model) -> Actor {
+        Actor::resolve(u.role, u.id, &self.job, self.accepted_provider_user)
+    }
     pub fn is_accepted_provider(&self, u: &user::Model) -> bool {
         self.accepted_provider_user == Some(u.id)
     }
@@ -411,6 +430,56 @@ pub async fn matching(db: &DatabaseConnection, u: &user::Model, page: u64) -> Ap
         category_names: dto.category_names,
         service_postal_codes: dto.service_postal_codes,
     })
+}
+
+pub async fn history(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<Vec<HistoryDto>> {
+    access(db, u, job_id, false).await?;
+    let rows = job_status_history::Entity::find()
+        .filter(job_status_history::Column::JobRequestId.eq(job_id))
+        .order_by_asc(job_status_history::Column::ChangedAt)
+        .order_by_asc(job_status_history::Column::Id)
+        .all(db)
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let by = user::Entity::find_by_id(r.changed_by).one(db).await?;
+        out.push(HistoryDto {
+            from_status: r.from_status,
+            to_status: r.to_status,
+            changed_by_name: by.as_ref().map(|b| b.full_name.clone()).unwrap_or_default(),
+            changed_by_role: by.map(|b| b.role).unwrap_or(UserRole::Customer),
+            note: r.note,
+            changed_at: r.changed_at,
+        });
+    }
+    Ok(out)
+}
+
+/// Status change from the job page: start, finish or cancel.
+pub async fn change_status(db: &DatabaseConnection, u: &user::Model, job_id: Uuid, input: StatusInput) -> AppResult<JobDto> {
+    // QUOTED and ACCEPTED have their own endpoints, EXPIRED and REVIEWED are not part of MVP
+    if !matches!(input.status, JobStatus::InProgress | JobStatus::Completed | JobStatus::Cancelled) {
+        return Err(AppError::invalid_transition());
+    }
+    let txn = db.begin().await?;
+    let a = access(&txn, u, job_id, true).await?;
+    let actor = a.actor(u);
+    workflow::check_transition(Some(a.job.status), input.status, actor)?;
+    let note = input.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+    if input.status == JobStatus::Cancelled && note.as_ref().is_none_or(|n| n.chars().count() < 10) {
+        return Err(AppError::field("note", "Razlog mora imeti vsaj 10 znakov."));
+    }
+    let job = workflow::apply(&txn, a.job, input.status, actor, u.id, note, None).await?;
+    if job.status == JobStatus::Cancelled {
+        quote::Entity::update_many()
+            .col_expr(quote::Column::Status, QuoteStatus::Rejected.as_enum())
+            .filter(quote::Column::JobRequestId.eq(job.id))
+            .filter(quote::Column::Status.eq(QuoteStatus::Pending))
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
+    get(db, u, job_id).await
 }
 
 #[cfg(test)]

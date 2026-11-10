@@ -124,4 +124,13 @@ mod tests {
         assert_eq!(check_transition(Some(Accepted), InProgress, Other).unwrap_err().status, 403);
         assert_eq!(check_transition(Some(InProgress), Completed, Admin).unwrap_err().status, 403);
     }
+
+    #[test]
+    fn customer_cancel_only_before_in_progress() {
+        assert!(check_transition(Some(Open), Cancelled, OwnerCustomer).is_ok());
+        assert!(check_transition(Some(Quoted), Cancelled, OwnerCustomer).is_ok());
+        assert!(check_transition(Some(Accepted), Cancelled, OwnerCustomer).is_ok());
+        assert!(check_transition(Some(InProgress), Cancelled, OwnerCustomer).is_err());
+        assert!(check_transition(Some(InProgress), Cancelled, Admin).is_ok());
+    }
 }
