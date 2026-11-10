@@ -32,6 +32,13 @@ pub struct CreateJobInput {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct ContactDto {
+    pub full_name: String,
+    pub phone: Option<String>,
+    pub business_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct JobDto {
     pub id: Uuid,
     pub category_id: Uuid,
@@ -40,18 +47,24 @@ pub struct JobDto {
     pub description: String,
     pub city: String,
     pub postal_code: String,
-    /// only for the customer
+    /// only for the customer and the accepted provider
     pub address_line: Option<String>,
     pub preferred_from: Option<NaiveDate>,
     pub preferred_to: Option<NaiveDate>,
     pub budget_min: Option<f64>,
     pub budget_max: Option<f64>,
     pub status: JobStatus,
+    pub accepted_quote_id: Option<Uuid>,
     pub expires_at: chrono::DateTime<chrono::FixedOffset>,
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
     /// quotes that are not withdrawn
     pub active_quote_count: i64,
     pub is_owner: bool,
+    pub is_accepted_provider: bool,
+    /// customer contact for the accepted provider
+    pub customer: Option<ContactDto>,
+    /// accepted provider contact for the customer
+    pub provider: Option<ContactDto>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -184,8 +197,25 @@ pub async fn create(db: &DatabaseConnection, u: &user::Model, input: CreateJobIn
 pub struct JobAccess {
     pub job: job_request::Model,
     pub is_owner: bool,
+    pub accepted_provider_user: Option<Uuid>,
     pub provider: Option<provider_profile::Model>,
     pub provider_matches: bool,
+}
+
+impl JobAccess {
+    pub fn is_accepted_provider(&self, u: &user::Model) -> bool {
+        self.accepted_provider_user == Some(u.id)
+    }
+}
+
+pub async fn accepted_provider_user<C: ConnectionTrait>(db: &C, job: &job_request::Model) -> AppResult<Option<Uuid>> {
+    let Some(qid) = job.accepted_quote_id else { return Ok(None) };
+    let q = quote::Entity::find_by_id(qid).one(db).await?;
+    let Some(q) = q else { return Ok(None) };
+    Ok(provider_profile::Entity::find_by_id(q.provider_id)
+        .one(db)
+        .await?
+        .map(|p| p.user_id))
 }
 
 pub async fn provider_matches<C: ConnectionTrait>(db: &C, p: &provider_profile::Model, job: &job_request::Model) -> AppResult<bool> {
@@ -204,6 +234,7 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid, l
         q = q.lock_exclusive();
     }
     let job = q.one(db).await?.ok_or_else(AppError::not_found)?;
+    let accepted = accepted_provider_user(db, &job).await?;
     let (provider, matches) = if u.role == UserRole::Provider {
         let p = profile_for_user(db, u).await?;
         let m = provider_matches(db, &p, &job).await?;
@@ -221,13 +252,14 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid, l
             .is_some(),
         None => false,
     };
-    let can_view = u.role == UserRole::Admin || is_owner || has_quote || matches;
+    let can_view = u.role == UserRole::Admin || is_owner || accepted == Some(u.id) || has_quote || matches;
     if !can_view {
         return Err(AppError::forbidden("Do tega povpraševanja nimate dostopa."));
     }
     Ok(JobAccess {
         job,
         is_owner,
+        accepted_provider_user: accepted,
         provider,
         provider_matches: matches,
     })
@@ -235,12 +267,38 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid, l
 
 pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<JobDto> {
     let a = access(db, u, job_id, false).await?;
+    let is_accepted_provider = a.is_accepted_provider(u);
     let job = a.job;
     let cat = service_category::Entity::find_by_id(job.category_id)
         .one(db)
         .await?
         .map(|c| c.name)
         .unwrap_or_default();
+    let show_address = a.is_owner || is_accepted_provider;
+    let customer = if is_accepted_provider {
+        user::Entity::find_by_id(job.customer_id).one(db).await?.map(|c| ContactDto {
+            full_name: c.full_name,
+            phone: c.phone,
+            business_name: None,
+        })
+    } else {
+        None
+    };
+    let provider = match (a.is_owner || u.role == UserRole::Admin, a.accepted_provider_user) {
+        (true, Some(pu)) => {
+            let pu = user::Entity::find_by_id(pu).one(db).await?;
+            let pp = provider_profile::Entity::find()
+                .filter(provider_profile::Column::UserId.eq(pu.as_ref().map(|x| x.id)))
+                .one(db)
+                .await?;
+            pu.map(|x| ContactDto {
+                full_name: x.full_name,
+                phone: x.phone,
+                business_name: pp.map(|p| p.business_name),
+            })
+        }
+        _ => None,
+    };
     let active_quote_count = quote::Entity::find()
         .filter(quote::Column::JobRequestId.eq(job.id))
         .filter(quote::Column::Status.ne(QuoteStatus::Withdrawn))
@@ -254,16 +312,20 @@ pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppR
         description: job.description,
         city: job.city,
         postal_code: job.postal_code,
-        address_line: if a.is_owner { job.address_line } else { None },
+        address_line: if show_address { job.address_line } else { None },
         preferred_from: job.preferred_from,
         preferred_to: job.preferred_to,
         budget_min: job.budget_min.map(crate::f),
         budget_max: job.budget_max.map(crate::f),
         status: job.status,
+        accepted_quote_id: job.accepted_quote_id,
         expires_at: job.expires_at,
         created_at: job.created_at,
         active_quote_count,
         is_owner: a.is_owner,
+        is_accepted_provider,
+        customer,
+        provider,
     })
 }
 

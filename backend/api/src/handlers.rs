@@ -10,7 +10,7 @@ use service::{
     categories::{self, CategoryDto},
     jobs::{self, CreateJobInput, JobDto, JobListItem, MatchingPage},
     providers::{self, ProviderProfileDto, ProviderProfileInput},
-    quotes::{self, MyQuoteItem, QuoteDto, QuoteInput},
+    quotes::{self, MyQuoteItem, QuoteDto, QuoteInput, QuoteSort},
 };
 use utoipa::IntoParams;
 use uuid::Uuid;
@@ -88,6 +88,21 @@ pub async fn create_quote(
     Ok((StatusCode::CREATED, Json(quotes::create(&s.db, &u, id, input).await?)))
 }
 
+#[derive(Deserialize, IntoParams)]
+pub struct SortQuery {
+    sort: Option<QuoteSort>,
+}
+
+#[utoipa::path(get, path = "/api/v1/job-requests/{id}/quotes", params(SortQuery), security(("bearer" = [])), responses((status = 200, body = [QuoteDto]), (status = 403)))]
+pub async fn job_quotes(
+    State(s): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<SortQuery>,
+) -> ApiResult<Json<Vec<QuoteDto>>> {
+    Ok(Json(quotes::list_for_job(&s.db, &u, id, q.sort.unwrap_or_default()).await?))
+}
+
 #[utoipa::path(get, path = "/api/v1/job-requests/{id}/my-quote", security(("bearer" = [])), responses((status = 200, body = Option<QuoteDto>)))]
 pub async fn my_quote(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<Option<QuoteDto>>> {
     Ok(Json(quotes::my_quote(&s.db, &u, id).await?))
@@ -106,6 +121,11 @@ pub async fn update_quote(
 #[utoipa::path(post, path = "/api/v1/quotes/{id}/withdraw", security(("bearer" = [])), responses((status = 200, body = QuoteDto)))]
 pub async fn withdraw_quote(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<QuoteDto>> {
     Ok(Json(quotes::withdraw(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/quotes/{id}/accept", security(("bearer" = [])), responses((status = 200, body = QuoteDto), (status = 403), (status = 409)))]
+pub async fn accept_quote(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<QuoteDto>> {
+    Ok(Json(quotes::accept(&s.db, &u, id).await?))
 }
 
 #[utoipa::path(get, path = "/api/v1/quotes/mine", security(("bearer" = [])), responses((status = 200, body = [MyQuoteItem])))]
