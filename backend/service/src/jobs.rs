@@ -8,7 +8,7 @@ use entity::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, FromQueryResult,
-    PaginatorTrait, QueryFilter, QueryOrder, Statement, TransactionTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -49,6 +49,8 @@ pub struct JobDto {
     pub status: JobStatus,
     pub expires_at: chrono::DateTime<chrono::FixedOffset>,
     pub created_at: chrono::DateTime<chrono::FixedOffset>,
+    /// quotes that are not withdrawn
+    pub active_quote_count: i64,
     pub is_owner: bool,
 }
 
@@ -196,11 +198,12 @@ pub async fn provider_matches<C: ConnectionTrait>(db: &C, p: &provider_profile::
         .is_some())
 }
 
-pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -> AppResult<JobAccess> {
-    let job = job_request::Entity::find_by_id(job_id)
-        .one(db)
-        .await?
-        .ok_or_else(AppError::not_found)?;
+pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid, lock: bool) -> AppResult<JobAccess> {
+    let mut q = job_request::Entity::find_by_id(job_id);
+    if lock {
+        q = q.lock_exclusive();
+    }
+    let job = q.one(db).await?.ok_or_else(AppError::not_found)?;
     let (provider, matches) = if u.role == UserRole::Provider {
         let p = profile_for_user(db, u).await?;
         let m = provider_matches(db, &p, &job).await?;
@@ -209,7 +212,16 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -
         (None, false)
     };
     let is_owner = job.customer_id == u.id;
-    let can_view = u.role == UserRole::Admin || is_owner || matches;
+    let has_quote = match &provider {
+        Some(p) => quote::Entity::find()
+            .filter(quote::Column::JobRequestId.eq(job.id))
+            .filter(quote::Column::ProviderId.eq(p.id))
+            .one(db)
+            .await?
+            .is_some(),
+        None => false,
+    };
+    let can_view = u.role == UserRole::Admin || is_owner || has_quote || matches;
     if !can_view {
         return Err(AppError::forbidden("Do tega povpraševanja nimate dostopa."));
     }
@@ -222,13 +234,18 @@ pub async fn access<C: ConnectionTrait>(db: &C, u: &user::Model, job_id: Uuid) -
 }
 
 pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppResult<JobDto> {
-    let a = access(db, u, job_id).await?;
+    let a = access(db, u, job_id, false).await?;
     let job = a.job;
     let cat = service_category::Entity::find_by_id(job.category_id)
         .one(db)
         .await?
         .map(|c| c.name)
         .unwrap_or_default();
+    let active_quote_count = quote::Entity::find()
+        .filter(quote::Column::JobRequestId.eq(job.id))
+        .filter(quote::Column::Status.ne(QuoteStatus::Withdrawn))
+        .count(db)
+        .await? as i64;
     Ok(JobDto {
         id: job.id,
         category_id: job.category_id,
@@ -245,6 +262,7 @@ pub async fn get(db: &DatabaseConnection, u: &user::Model, job_id: Uuid) -> AppR
         status: job.status,
         expires_at: job.expires_at,
         created_at: job.created_at,
+        active_quote_count,
         is_owner: a.is_owner,
     })
 }

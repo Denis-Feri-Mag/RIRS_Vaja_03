@@ -3,6 +3,7 @@ pub mod categories;
 pub mod error;
 pub mod jobs;
 pub mod providers;
+pub mod quotes;
 pub mod seed;
 pub mod workflow;
 

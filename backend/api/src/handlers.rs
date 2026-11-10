@@ -10,6 +10,7 @@ use service::{
     categories::{self, CategoryDto},
     jobs::{self, CreateJobInput, JobDto, JobListItem, MatchingPage},
     providers::{self, ProviderProfileDto, ProviderProfileInput},
+    quotes::{self, MyQuoteItem, QuoteDto, QuoteInput},
 };
 use utoipa::IntoParams;
 use uuid::Uuid;
@@ -75,4 +76,39 @@ pub async fn matching(State(s): State<AppState>, CurrentUser(u): CurrentUser, Qu
 #[utoipa::path(get, path = "/api/v1/job-requests/{id}", security(("bearer" = [])), responses((status = 200, body = JobDto)))]
 pub async fn get_job(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<JobDto>> {
     Ok(Json(jobs::get(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/job-requests/{id}/quotes", security(("bearer" = [])), request_body = QuoteInput, responses((status = 201, body = QuoteDto), (status = 403), (status = 409)))]
+pub async fn create_quote(
+    State(s): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<QuoteInput>,
+) -> ApiResult<(StatusCode, Json<QuoteDto>)> {
+    Ok((StatusCode::CREATED, Json(quotes::create(&s.db, &u, id, input).await?)))
+}
+
+#[utoipa::path(get, path = "/api/v1/job-requests/{id}/my-quote", security(("bearer" = [])), responses((status = 200, body = Option<QuoteDto>)))]
+pub async fn my_quote(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<Option<QuoteDto>>> {
+    Ok(Json(quotes::my_quote(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(put, path = "/api/v1/quotes/{id}", security(("bearer" = [])), request_body = QuoteInput, responses((status = 200, body = QuoteDto)))]
+pub async fn update_quote(
+    State(s): State<AppState>,
+    CurrentUser(u): CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<QuoteInput>,
+) -> ApiResult<Json<QuoteDto>> {
+    Ok(Json(quotes::update(&s.db, &u, id, input).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/quotes/{id}/withdraw", security(("bearer" = [])), responses((status = 200, body = QuoteDto)))]
+pub async fn withdraw_quote(State(s): State<AppState>, CurrentUser(u): CurrentUser, Path(id): Path<Uuid>) -> ApiResult<Json<QuoteDto>> {
+    Ok(Json(quotes::withdraw(&s.db, &u, id).await?))
+}
+
+#[utoipa::path(get, path = "/api/v1/quotes/mine", security(("bearer" = [])), responses((status = 200, body = [MyQuoteItem])))]
+pub async fn my_quotes(State(s): State<AppState>, CurrentUser(u): CurrentUser) -> ApiResult<Json<Vec<MyQuoteItem>>> {
+    Ok(Json(quotes::list_mine(&s.db, &u).await?))
 }
